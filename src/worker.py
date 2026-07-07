@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import select
 
 from src.core.config import settings
-from src.models import Video, VideoStatus
+from src.models import Video, VideoStatus, VideoQuality
 from src.services.minio_service import MinIOService
 from src.services.video_processor import VideoProcessor
 
@@ -78,10 +78,13 @@ class VideoWorker:
                 logger.info("Downloading video from MinIO", video_id=video_id)
                 input_data = await self.minio.download_file(str(video.input_path))
 
-                logger.info("Processing video", video_id=video_id)
+                # Получаем качество из БД
+                quality = video.quality.value if video.quality else "medium"
+
+                logger.info("Processing video", video_id=video_id, quality=quality)
                 output_data, metadata = await self.processor.process(
                     input_data,
-                    quality="medium",
+                    quality=quality,
                     video_id=video_id
                 )
 
@@ -103,12 +106,14 @@ class VideoWorker:
 
                 logger.info("Video processed successfully", video_id=video_id)
 
+                # Отправляем результат в Kafka
                 if self.producer:
                     self.producer.send('video-processing-results', {
                         'video_id': video_id,
                         'status': 'completed',
                         'output_path': output_path
                     })
+                    self.producer.flush()
 
             except Exception as e:
                 logger.error(f"Error processing video: {e}", video_id=video_id)

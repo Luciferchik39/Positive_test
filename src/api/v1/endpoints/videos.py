@@ -7,9 +7,9 @@ from typing import List, Optional, Any, Dict
 import uuid
 import structlog
 import os
-
+from src.services.kafka_service import KafkaService
 from src.core.database import get_db
-from src.models import Video, VideoStatus
+from src.models import Video, VideoStatus, VideoQuality
 from src.schemas.video import VideoResponse, VideoListResponse, VideoUploadResponse
 from src.services.minio_service import MinIOService
 
@@ -24,6 +24,7 @@ minio_service = MinIOService()
 async def upload_video(
     title: str = Form(..., min_length=1, max_length=200),
     description: Optional[str] = Form(None),
+    quality: VideoQuality = Form(default=VideoQuality.MEDIUM),
     file: UploadFile = File(..., description="Видео файл (mp4, avi, mov, mkv, webm)"),
     db: AsyncSession = Depends(get_db)
 ) -> VideoUploadResponse:
@@ -67,6 +68,7 @@ async def upload_video(
         id=video_id,
         title=title,
         description=description,
+        quality=quality,
         original_filename=file.filename,
         input_path=input_path,
         file_size=file_size,
@@ -78,7 +80,21 @@ async def upload_video(
     await db.commit()
     await db.refresh(video)
 
-    # TODO: Отправить задачу в Kafka
+    # Инициализируем Kafka сервис
+    kafka_service = KafkaService()
+
+    # Отправляем задачу в Kafka
+    try:
+        await kafka_service.start_producer()
+        await kafka_service.send_video_task(
+            video_id=str(video.id),
+            input_path=str(video.input_path),
+            quality="medium",
+        )
+        await kafka_service.stop_producer()
+    except Exception as e:
+        logger.error(f"Failed to send task to Kafka: {e}")
+        # Не блокируем ответ, если Kafka недоступна
 
     logger.info("Video uploaded successfully", video_id=str(video_id))
 

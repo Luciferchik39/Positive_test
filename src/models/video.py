@@ -36,6 +36,9 @@ class Video(Base, TimestampMixin):
     height = Column(Integer, nullable=True)
     fps = Column(Float, nullable=True)
 
+    quality: VideoQuality = Column(  # type: ignore[assignment]
+        Enum(VideoQuality), default=VideoQuality.MEDIUM, nullable=True
+    )
     status: VideoStatus = Column(  # type: ignore[assignment]
         Enum(VideoStatus), default=VideoStatus.PENDING, nullable=False
     )
