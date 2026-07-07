@@ -1,0 +1,59 @@
+# Positive_test/.dockerignore
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+.eggs/
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment variables
+.env
+.env.local
+
+# Ruff
+.ruff_cache/
+
+# Mypy
+.mypy_cache/
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+Dockerfile.worker
+docker-compose.yaml
+.dockerignore
+
+# Tests
+tests/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+volumes/
+data/
+logs/

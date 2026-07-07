@@ -1,0 +1,69 @@
+[tool.poetry]
+name = "video-core"
+version = "0.1.0"
+description = "Video processing service with FastAPI"
+authors = ["Ilya <ilya@ops.com>"]
+readme = "README.md"
+packages = [{include = "src", from = "."}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.30.0"}
+sqlalchemy = {extras = ["asyncio"], version = "^2.0.35"}
+asyncpg = "^0.30.0"
+alembic = "^1.13.0"
+pydantic-settings = "^2.5.0"
+aiokafka = "^0.11.0"
+boto3 = "^1.35.0"
+redis = "^5.1.0"
+structlog = "^24.4.0"
+python-multipart = "^0.0.12"
+httpx = "^0.27.0"
+environs = "^11.0.0"
+kafka-python = "^2.0.2"
+
+
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.6.0"
+mypy = "^1.11.0"
+pytest = "^8.3.0"
+pytest-asyncio = "^0.24.0"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+    "aiokafka.*",
+    "boto3.*",
+    "redis.*",
+    "structlog.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
