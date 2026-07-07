@@ -1,133 +1,164 @@
 # src/worker.py
 import json
-import logging
-import time
-from typing import Dict, Any
-
-from kafka import KafkaConsumer, KafkaProducer
-from kafka.errors import NoBrokersAvailable
+import structlog
 import os
-import signal
-import sys
+import time
+import asyncio
+from datetime import datetime
+from typing import Optional, Dict, Any
+from kafka import KafkaConsumer, KafkaProducer
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy import select
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from src.core.config import settings
+from src.models import Video, VideoStatus
+from src.services.minio_service import MinIOService
+from src.services.video_processor import VideoProcessor
+
+logger = structlog.get_logger(__name__)
 
 
-class VideoProcessor:
-    def __init__(self):
-        self.bootstrap_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092')
-        self.consumer = None
-        self.producer = None
-        self.running = True
+class VideoWorker:
+    def __init__(self) -> None:
+        self.running: bool = True
+        self.consumer: Optional[KafkaConsumer] = None
+        self.producer: Optional[KafkaProducer] = None
 
-        signal.signal(signal.SIGINT, self.shutdown)
-        signal.signal(signal.SIGTERM, self.shutdown)
+        self.engine = create_async_engine(settings.database_url, echo=True)
+        self.async_session = async_sessionmaker(
+            self.engine, expire_on_commit=False
+        )
 
-    def shutdown(self, signum=None, frame=None):
-        logger.info("Received shutdown signal, stopping worker...")
-        self.running = False
+        self.minio = MinIOService()
+        self.processor = VideoProcessor()
 
-    def connect(self):
-        """Connect to Kafka"""
-        retries = 10
-        while retries > 0 and self.running:
-            try:
-                logger.info(f"Connecting to Kafka at {self.bootstrap_servers}")
-                self.consumer = KafkaConsumer(
-                    'video-processing-tasks',  # Топик для задач
-                    bootstrap_servers=self.bootstrap_servers,
-                    value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-                    auto_offset_reset='earliest',
-                    enable_auto_commit=True,
-                    group_id='video-processor-group'
-                )
-
-                self.producer = KafkaProducer(
-                    bootstrap_servers=self.bootstrap_servers,
-                    value_serializer=lambda v: json.dumps(v).encode('utf-8')
-                )
-
-                logger.info("Successfully connected to Kafka")
-                return True
-
-            except NoBrokersAvailable:
-                logger.warning(f"No brokers available. Retrying in 5s... (retries left: {retries})")
-                time.sleep(5)
-                retries -= 1
-            except Exception as e:
-                logger.error(f"Error connecting to Kafka: {e}")
-                time.sleep(5)
-                retries -= 1
-
-        logger.error("Failed to connect to Kafka after retries")
-        return False
-
-    def process_video(self, task: Dict[str, Any]):
-        """Обработка видео задачи"""
-        video_id = task.get('video_id')
-        video_path = task.get('video_path')
-        user_id = task.get('user_id')
-
-        logger.info(f"Processing video {video_id} for user {user_id}")
-
+    def connect_kafka(self) -> bool:
+        """Подключение к Kafka"""
         try:
-            # 🔥 ЗДЕСЬ ВАША ЛОГИКА ОБРАБОТКИ ВИДЕО 🔥
-            # Например:
-            # 1. Загрузка видео из MinIO
-            # 2. Обработка (конвертация, обрезка, анализ и т.д.)
-            # 3. Сохранение результата обратно в MinIO
+            self.consumer = KafkaConsumer(
+                settings.KAFKA_TOPIC_VIDEO_PROCESSING,
+                bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
+                value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+                auto_offset_reset='earliest',
+                enable_auto_commit=True,
+                group_id='video-worker-group'
+            )
 
-            time.sleep(5)  # Имитация обработки
+            self.producer = KafkaProducer(
+                bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
+                value_serializer=lambda v: json.dumps(v).encode('utf-8')
+            )
 
-            # Отправка результата
-            result = {
-                'video_id': video_id,
-                'status': 'completed',
-                'result_path': f'/processed/{video_id}_processed.mp4'
-            }
-
-            self.producer.send('video-processing-results', result)
-            logger.info(f"Video {video_id} processed successfully")
-
+            logger.info("Connected to Kafka")
+            return True
         except Exception as e:
-            logger.error(f"Error processing video {video_id}: {e}")
-            # Отправка ошибки
-            self.producer.send('video-processing-results', {
-                'video_id': video_id,
-                'status': 'failed',
-                'error': str(e)
-            })
+            logger.error(f"Failed to connect to Kafka: {e}")
+            return False
 
-    def run(self):
-        """Основной цикл воркера"""
-        if not self.connect():
-            logger.error("Could not connect to Kafka, exiting...")
-            sys.exit(1)
+    async def process_video(self, video_id: str) -> None:
+        """Обработка видео"""
+        logger.info("Processing video", video_id=video_id)
+
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(Video).where(Video.id == video_id)  # type: ignore
+            )
+            video: Optional[Video] = result.scalar_one_or_none()
+
+            if not video:
+                logger.error("Video not found", video_id=video_id)
+                return
+
+            try:
+                # Обновляем статус
+                video.status = VideoStatus.PROCESSING  # type: ignore[assignment]
+                video.progress = 0  # type: ignore[assignment]
+                await session.commit()
+
+                logger.info("Downloading video from MinIO", video_id=video_id)
+                input_data = await self.minio.download_file(video.input_path)
+
+                logger.info("Processing video", video_id=video_id)
+                output_data, metadata = await self.processor.process(
+                    input_data,
+                    quality="medium",
+                    video_id=video_id
+                )
+
+                output_path = f"processed/{video_id}/output.mp4"
+                logger.info("Uploading result to MinIO", video_id=video_id)
+                await self.minio.upload_file(output_path, output_data)
+
+                # Обновляем запись в БД
+                video.output_path = output_path  # type: ignore[assignment]
+                video.status = VideoStatus.COMPLETED  # type: ignore[assignment]
+                video.progress = 100  # type: ignore[assignment]
+                video.processed_at = datetime.now()  # type: ignore[assignment]
+                video.duration = metadata.get('duration')  # type: ignore[assignment]
+                video.width = metadata.get('width')  # type: ignore[assignment]
+                video.height = metadata.get('height')  # type: ignore[assignment]
+                video.fps = metadata.get('fps')  # type: ignore[assignment]
+
+                await session.commit()
+
+                logger.info("Video processed successfully", video_id=video_id)
+
+                if self.producer:
+                    self.producer.send('video-processing-results', {
+                        'video_id': video_id,
+                        'status': 'completed',
+                        'output_path': output_path
+                    })
+
+            except Exception as e:
+                logger.error(f"Error processing video: {e}", video_id=video_id)
+                video.status = VideoStatus.FAILED  # type: ignore[assignment]
+                video.error_message = str(e)  # type: ignore[assignment]
+                await session.commit()
+
+    async def run(self) -> None:
+        """Основной цикл worker"""
+        if not self.connect_kafka():
+            return
 
         logger.info("Worker started, waiting for tasks...")
 
         while self.running:
             try:
-                # Получаем сообщения из Kafka
+                if self.consumer is None:
+                    break
+
                 messages = self.consumer.poll(timeout_ms=1000)
 
                 for topic_partition, records in messages.items():
                     for record in records:
-                        task = record.value
-                        logger.info(f"Received task: {task}")
-                        self.process_video(task)
+                        task: Dict[str, Any] = record.value
+                        video_id: Optional[str] = task.get('video_id')
 
-                time.sleep(0.1)
+                        if video_id:
+                            await self.process_video(video_id)
 
+                await asyncio.sleep(0.1)
+
+            except KeyboardInterrupt:
+                logger.info("Shutting down worker...")
+                self.running = False
+                break
             except Exception as e:
                 logger.error(f"Error in worker loop: {e}")
-                time.sleep(5)
+                await asyncio.sleep(5)
+
+        if self.consumer:
+            self.consumer.close()
+        if self.producer:
+            self.producer.close()
+        await self.engine.dispose()
+
+
+async def main() -> None:
+    worker = VideoWorker()
+    await worker.run()
 
 
 if __name__ == "__main__":
-    processor = VideoProcessor()
-    processor.run()
+    asyncio.run(main())

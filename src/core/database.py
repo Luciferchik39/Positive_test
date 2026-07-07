@@ -1,14 +1,15 @@
-# src/core/database.py
+import os
 from typing import AsyncGenerator
+
+import structlog
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase
-import os
 
-from src.models.base import Base
+logger = structlog.get_logger(__name__)
 
 # URL для асинхронного подключения
 DATABASE_URL = os.getenv(
@@ -39,3 +40,14 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             yield session
         finally:
             await session.close()
+
+async def check_database_connection() -> bool:
+    """Проверка подключения к базе данных."""
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        logger.info("Database connection successful")
+        return True
+    except Exception as e:
+        logger.error(f"Database connection failed: {e}")
+        return False

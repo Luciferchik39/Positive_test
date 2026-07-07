@@ -1,7 +1,6 @@
-# alembic/env.py
+import asyncio
 import sys
 from pathlib import Path
-import asyncio
 
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -12,7 +11,6 @@ from alembic import context
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.models.base import Base
-from src.models import User, Video
 
 config = context.config
 target_metadata = Base.metadata

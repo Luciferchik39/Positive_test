@@ -1,7 +1,9 @@
 # src/models/user.py
-from sqlalchemy import Column, String, UUID
-from sqlalchemy.orm import relationship
 import uuid
+
+from sqlalchemy import UUID, Column, String
+from sqlalchemy.orm import relationship
+
 from .base import Base, TimestampMixin
 
 

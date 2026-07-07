@@ -1,6 +1,8 @@
 # Positive_test/src/main.py
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+from fastapi.responses import JSONResponse
 
 import structlog
 from fastapi import FastAPI
@@ -11,11 +13,15 @@ from src.api.v1.endpoints import health
 from src.core.config import settings
 from src.core.database import check_database_connection
 
+# Настройка стандартного logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
 # Configure structlog
 structlog.configure(
     processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt="iso"),
@@ -25,7 +31,7 @@ structlog.configure(
         structlog.processors.JSONRenderer(),
     ],
     context_class=dict,
-    logger_factory=structlog.PrintLoggerFactory(),
+    logger_factory=structlog.stdlib.LoggerFactory(),
     wrapper_class=structlog.stdlib.BoundLogger,
     cache_logger_on_first_use=True,
 )
@@ -54,6 +60,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
+
+
     app = FastAPI(
         title=settings.PROJECT_NAME,
         version=settings.VERSION,
@@ -64,7 +72,7 @@ def create_app() -> FastAPI:
         openapi_url="/api/openapi.json",
     )
 
-    # CORS middleware - используем настройки из config
+    # CORS middleware
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ALLOWED_ORIGINS,
@@ -79,7 +87,7 @@ def create_app() -> FastAPI:
 
     # Корневой эндпоинт
     @app.get("/")
-    async def root():
+    async def root() -> dict:
         return {
             "service": settings.PROJECT_NAME,
             "version": settings.VERSION,

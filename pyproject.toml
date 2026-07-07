@@ -50,6 +50,8 @@ module = [
     "boto3.*",
     "redis.*",
     "structlog.*",
+    "kafka.*",
+    "sqlalchemy.*",
 ]
 ignore_missing_imports = true
 

@@ -2,6 +2,7 @@
 from sqlalchemy import Column, DateTime, func
 from sqlalchemy.orm import DeclarativeBase
 
+
 class Base(DeclarativeBase):
     """Базовая модель для всех таблиц"""
     pass

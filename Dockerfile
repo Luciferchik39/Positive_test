@@ -9,9 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Poetry
-RUN curl -sSL https://install.python-poetry.org | python3 -
-ENV PATH="/root/.local/bin:$PATH"
+# Install Poetry (используем pip вместо curl для скорости)
+RUN pip install --no-cache-dir poetry --root-user-action=ignore
 
 # Set working directory
 WORKDIR /app
@@ -22,7 +21,7 @@ COPY pyproject.toml poetry.lock* ./
 # Configure Poetry to not create virtual environment
 RUN poetry config virtualenvs.create false
 
-# Install dependencies (without dev dependencies)
+# Install dependencies (without dev dependencies, skip project)
 RUN poetry install --without dev --no-interaction --no-ansi --no-root
 
 # Stage 2: Production image
@@ -53,5 +52,5 @@ RUN mkdir -p /app/data /app/logs && chown -R appuser:appuser /app
 # Switch to non-root user
 USER appuser
 
-# Run the worker
-CMD ["python", "-m", "src.worker"]
+# Run the application
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
