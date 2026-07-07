@@ -11,12 +11,13 @@ import os
 from src.core.database import get_db
 from src.models import Video, VideoStatus
 from src.schemas.video import VideoResponse, VideoListResponse, VideoUploadResponse
+from src.services.minio_service import MinIOService
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
 
-UPLOAD_DIR = "/app/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Инициализируем MinIO сервис
+minio_service = MinIOService()
 
 
 @router.post("/upload", response_model=VideoUploadResponse, status_code=201)
@@ -32,6 +33,7 @@ async def upload_video(
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
 
+    # Проверяем расширение
     allowed_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in allowed_extensions:
@@ -42,16 +44,25 @@ async def upload_video(
 
     video_id = uuid.uuid4()
     input_filename = f"{video_id}{ext}"
-    input_path = f"uploads/{input_filename}"
+    input_path = f"videos/{video_id}/{input_filename}"
 
-    file_path = os.path.join(UPLOAD_DIR, input_filename)
+    # Читаем содержимое файла
     content = await file.read()
-
-    with open(file_path, "wb") as f:
-        f.write(content)
-
     file_size = len(content)
 
+    # Сохраняем в MinIO
+    try:
+        await minio_service.upload_file(
+            file_path=input_path,
+            file_data=content,
+            content_type=file.content_type or "video/mp4"
+        )
+        logger.info("File uploaded to MinIO", path=input_path)
+    except Exception as e:
+        logger.error(f"Failed to upload to MinIO: {e}")
+        raise HTTPException(status_code=500, detail=f"Storage error: {str(e)}")
+
+    # Создаем запись в БД
     video = Video(
         id=video_id,
         title=title,
@@ -66,6 +77,8 @@ async def upload_video(
     db.add(video)
     await db.commit()
     await db.refresh(video)
+
+    # TODO: Отправить задачу в Kafka
 
     logger.info("Video uploaded successfully", video_id=str(video_id))
 
@@ -159,7 +172,7 @@ async def download_video(
     video_id: uuid.UUID,
     db: AsyncSession = Depends(get_db)
 ) -> FileResponse:
-    """Скачать обработанное видео."""
+    """Скачать обработанное видео из MinIO."""
     logger.info("Downloading video", video_id=str(video_id))
 
     result = await db.execute(
@@ -179,19 +192,18 @@ async def download_video(
     if not video.output_path:
         raise HTTPException(status_code=404, detail="Processed video not found")
 
-    file_path = os.path.join(UPLOAD_DIR, os.path.basename(video.input_path))
+    # Скачиваем файл из MinIO — приводим к str
+    try:
+        file_data = await minio_service.download_file(str(video.output_path))
+    except Exception as e:
+        logger.error(f"Failed to download from MinIO: {e}")
+        raise HTTPException(status_code=404, detail="Video file not found")
 
-    if not os.path.exists(file_path):
-        processed_path = os.path.join(UPLOAD_DIR, f"processed_{os.path.basename(video.input_path)}")
-        if os.path.exists(processed_path):
-            file_path = processed_path
-        else:
-            raise HTTPException(status_code=404, detail="Video file not found")
-
+    # Возвращаем файл — приводим filename к str
     filename = str(video.original_filename) if video.original_filename else f"video_{video_id}.mp4"
 
     return FileResponse(
-        path=file_path,
+        path=str(video.output_path),
         filename=filename,
         media_type="video/mp4"
     )
@@ -213,13 +225,13 @@ async def delete_video(
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    input_file = os.path.join(UPLOAD_DIR, os.path.basename(video.input_path))
-    if os.path.exists(input_file):
-        os.remove(input_file)
-
-    processed_file = os.path.join(UPLOAD_DIR, f"processed_{os.path.basename(video.input_path)}")
-    if os.path.exists(processed_file):
-        os.remove(processed_file)
+    # Удаляем файлы из MinIO — приводим к str
+    try:
+        await minio_service.delete_file(str(video.input_path))
+        if video.output_path:
+            await minio_service.delete_file(str(video.output_path))
+    except Exception as e:
+        logger.error(f"Failed to delete from MinIO: {e}")
 
     await db.delete(video)
     await db.commit()

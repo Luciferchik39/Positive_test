@@ -76,7 +76,7 @@ class VideoWorker:
                 await session.commit()
 
                 logger.info("Downloading video from MinIO", video_id=video_id)
-                input_data = await self.minio.download_file(video.input_path)
+                input_data = await self.minio.download_file(str(video.input_path))
 
                 logger.info("Processing video", video_id=video_id)
                 output_data, metadata = await self.processor.process(

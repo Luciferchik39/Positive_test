@@ -22,7 +22,7 @@ python-multipart = "^0.0.12"
 httpx = "^0.27.0"
 environs = "^11.0.0"
 kafka-python = "^2.0.2"
-
+minio = "^7.2.0"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -48,12 +48,14 @@ explicit_package_bases = true
 module = [
     "aiokafka.*",
     "boto3.*",
+    "kafka.*",
     "redis.*",
     "structlog.*",
-    "kafka.*",
     "sqlalchemy.*",
+    "alembic.*",
 ]
 ignore_missing_imports = true
+ignore_errors = true
 
 [tool.ruff]
 line-length = 100
